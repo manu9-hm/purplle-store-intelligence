@@ -1,0 +1,28 @@
+{
+  "camera_id": "CAM3",
+  "zones": [
+    {
+      "zone_id": "entrance_zone",
+      "zone_type": "entrance",
+      "polygon": [
+        [
+          732,
+          402
+        ],
+        [
+          1024,
+          204
+        ],
+        [
+          1295,
+          313
+        ],
+        [
+          994,
+          671
+        ]
+      ]
+    }
+  ],
+  "description": "CAM3 entrance zone for footfall ENTRY, EXIT, and REENTRY events. Placeholder polygon assumes a 1280x720 frame and should be calibrated from a real frame."
+}

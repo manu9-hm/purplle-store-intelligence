@@ -1,0 +1,48 @@
+{
+  "camera_id": "CAM1",
+  "zones": [
+    {
+      "zone_id": "skincare_zone",
+      "zone_type": "browsing",
+      "polygon": [
+        [
+          172,
+          1005
+        ],
+        [
+          1046,
+          742
+        ],
+        [
+          1366,
+          618
+        ],
+        [
+          1641,
+          500
+        ],
+        [
+          1722,
+          526
+        ],
+        [
+          1189,
+          819
+        ],
+        [
+          479,
+          1051
+        ],
+        [
+          294,
+          1075
+        ],
+        [
+          219,
+          1076
+        ]
+      ]
+    }
+  ],
+  "description": "CAM1 skincare browsing zone. Placeholder polygon assumes a 1280x720 frame and should be calibrated from a real frame."
+}

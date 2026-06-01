@@ -1,0 +1,32 @@
+{
+  "camera_id": "CAM5",
+  "description": "CAM5 billing counter customer-side queue zone calibrated for 1920x1080 footage. Polygon covers the floor area where customers stand near the billing counter and excludes the staff/POS side as much as possible.",
+  "zones": [
+    {
+      "zone_id": "billing_zone",
+      "zone_type": "billing",
+      "polygon": [
+        [
+          780,
+          420
+        ],
+        [
+          1190,
+          405
+        ],
+        [
+          1450,
+          1030
+        ],
+        [
+          930,
+          1030
+        ],
+        [
+          820,
+          710
+        ]
+      ]
+    }
+  ]
+}

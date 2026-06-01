@@ -1,0 +1,16 @@
+{
+  "camera_id": "CAM4",
+  "description": "CAM4 storage room activity zone. Placeholder polygon assumes a 1280x720 frame and should be calibrated from a real frame.",
+  "zones": [
+    {
+      "zone_id": "storage_zone",
+      "zone_type": "storage",
+      "polygon": [
+        [180, 150],
+        [1090, 150],
+        [1180, 700],
+        [100, 700]
+      ]
+    }
+  ]
+}
