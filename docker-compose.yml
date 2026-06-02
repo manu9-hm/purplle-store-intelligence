@@ -1,0 +1,9 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_PATH: /app/data/intelligence/events.sqlite
+    volumes:
+      - ./data/intelligence:/app/data/intelligence

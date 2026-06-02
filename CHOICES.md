@@ -1,0 +1,62 @@
+# CHOICES.md - Engineering Trade-offs
+
+## Decision 1: Detection Model Choice
+*   **Options Considered**: YOLOv8, Faster R-CNN, DETR.
+*   **AI Suggestion**: YOLOv8 for "real-world edge compatibility."
+*   **Final Choice**: **YOLOv8**.
+*   **Why**: It provides the best trade-off between inference speed and detection accuracy, especially for detecting small objects (foot points) in high-angle retail cameras.
+
+## Decision 2: Event Schema Design
+*   **Options Considered**: 
+    1. Raw Detection Logs (Every bounding box)
+    2. Aggregated Daily Stats
+    3. Normalized Event Schema (Atomic state changes)
+*   **AI Suggestion**: Normalized Event Schema.
+*   **Final Choice**: **Normalized Event Schema**.
+*   **Why**: Raw detections are too heavy for API ingestion, while daily stats lose the granularity needed for funnel analysis. The normalized schema (ENTRY, ZONE_DWELL, etc.) allows for complex re-entry logic and retro-active analytics without re-processing video.
+
+## Decision 3: API Architecture Choice
+*   **Options Considered**: Flask, FastAPI, Django.
+*   **AI Suggestion**: FastAPI.
+*   **Final Choice**: **FastAPI**.
+*   **Why**: 
+    1.  **Speed**: Essential for the `/events/ingest` endpoint which may handle high-frequency bursts.
+    2.  **Validation**: Built-in Pydantic integration ensures data integrity before it touches the database.
+    3.  **Documentation**: Auto-generated Swagger/OpenAPI docs simplified the integration with the detection pipeline.
+
+## Decision 4: Database Selection
+*   **Options Considered**: PostgreSQL, MongoDB, SQLite.
+*   **AI Suggestion**: PostgreSQL.
+*   **Final Choice**: **SQLite**.
+*   **Why**: For Phase 1 and the specific challenge requirements, the "zero-configuration" nature of SQLite was superior. It allows the entire system to be containerized and portable without a separate DB management overhead, while still supporting the complex CTEs (Common Table Expressions) used in the Funnel analytics.
+
+## Decision 5: Funnel Session Validation
+*   **Observation**: CAM3 (entrance camera) produced no entry events in the provided sample; customers were already present in CAM1/CAM2 when recording started.
+*   **Logic**: Zone activity is reported to show store engagement. However, entry-based conversion stages (Billing, Purchase) remain zero because the beginning of the journey was not observed. 
+*   **Why**: This preserves metric correctness. Attributing purchases to sessions where the entry was missed would lead to misleading conversion rate spikes.
+
+## Decision 6: Multi-Camera Visitor Tracking
+*   **Observation**: The system treats each camera as an independent tracking domain (local Re-ID).
+*   **Impact**: Unique visitor counts may be inflated because a single customer moving between cameras (e.g., from CAM1 to CAM2) is assigned a new `visitor_id` by each local tracker.
+*   **Reasoning**: Full cross-camera Re-ID is a Phase 2 objective. For Phase 1, per-camera event accuracy was prioritized over global visitor deduplication.
+
+## Decision 7: Conversion Metric Definition
+*   **Standard**: Purchases / Total Visitors.
+*   **Final Choice**: **Billing Interaction Proxy**.
+*   **Why**: Integrated POS/Order data is not yet available in the event stream. Therefore, a visitor reaching the `billing_zone` or triggering a `BILLING_QUEUE_JOIN` event is used as the numerator for the conversion rate.
+*   **Note**: As a result, the `conversion_rate` in the Metrics API may be non-zero while `purchase_count` in the Funnel API remains zero, because the funnel strictly requires an observed `ENTRY` event to validate the session.
+
+## North Star Metric Alignment
+**Business Metric**: Offline Store Conversion Rate (Purchases ÷ Unique Visitors).
+
+How subsystems contribute:
+*   **Detection/Ingest**: Defines the denominator by identifying unique non-staff tracks.
+*   **Funnel Logic**: Enforces the "Session Window" requirement by validating that journeys start with an entry and end with a purchase.
+*   **Heatmap/Anomalies**: Act as diagnostic tools to explain *why* the North Star Metric might be dropping (e.g., high browsing but no checkout).
+
+**Known Limitations & Trade-offs**:
+1.  **Re-ID Fragmentation**: May slightly inflate the denominator (Total Visitors) until cross-camera tracking is implemented in Phase 2.
+2.  **Missing Entries (CAM3)**: Preferring accuracy over inference; we choose to report 0% conversion for sessions where the entry was not seen to avoid skewing data with incomplete sessions.
+
+---
+*Part D Compliance - Purplle Store Intelligence Challenge*
