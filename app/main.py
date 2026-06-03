@@ -32,6 +32,14 @@ class EventIn(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+class TransactionIn(BaseModel):
+    transaction_id: str = Field(min_length=1)
+    store_id: str = Field(min_length=1)
+    timestamp: str = Field(min_length=1)
+    amount: float = Field(ge=0.0)
+    items_count: int = Field(ge=0)
+
+
 class InvalidEvent(BaseModel):
     index: int
     event_id: Optional[str]
@@ -102,6 +110,18 @@ class StoreAnomaliesResponse(BaseModel):
 
 
 app = FastAPI(title="Purplle Store Intelligence API")
+
+def normalize_store_id(sid: str) -> str:
+    """Standardizes store IDs by removing common prefixes and whitespace."""
+    if not sid:
+        return "unknown"
+    s = str(sid).lower().strip()
+    if s.startswith("store_"):
+        return s[6:]
+    if s.startswith("st"):
+        return s[2:]
+    return s
+
 
 @app.middleware("http")
 async def structured_logging_middleware(request: Request, call_next):
@@ -199,6 +219,21 @@ def init_database() -> None:
                 ON events(store_id, is_staff)
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS transactions (
+                    transaction_id TEXT PRIMARY KEY,
+                    store_id TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    amount REAL NOT NULL,
+                    items_count INTEGER NOT NULL,
+                    ingested_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tx_store_id ON transactions(store_id)"
+            )
     except sqlite3.Error as exc:
         raise DatabaseUnavailableError() from exc
 
@@ -279,7 +314,7 @@ async def ingest_events(request: Request) -> IngestResponse:
                 """,
                 (
                     event.event_id,
-                    event.store_id,
+                    normalize_store_id(event.store_id),
                     event.camera_id,
                     event.visitor_id,
                     event.event_type,
@@ -302,6 +337,34 @@ async def ingest_events(request: Request) -> IngestResponse:
         invalid_count=len(invalid_events),
         invalid_events=invalid_events,
     )
+
+
+@app.post("/pos/ingest")
+async def ingest_pos(request: Request) -> Dict[str, int]:
+    try:
+        payload = await request.json()
+        transactions = payload.get("transactions", [])
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON.")
+
+    inserted = 0
+    with get_connection() as connection:
+        for tx in transactions:
+            try:
+                t = TransactionIn.model_validate(tx)
+                cursor = connection.execute(
+                    """
+                    INSERT OR IGNORE INTO transactions 
+                    (transaction_id, store_id, timestamp, amount, items_count)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (t.transaction_id, normalize_store_id(t.store_id), t.timestamp, t.amount, t.items_count)
+                )
+                if cursor.rowcount == 1:
+                    inserted += 1
+            except ValidationError:
+                continue
+    return {"inserted_count": inserted}
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -363,22 +426,9 @@ def parse_event_timestamp(timestamp: str) -> Optional[datetime]:
         return None
 
 
-def conversion_proxy_rate(rows: List[sqlite3.Row]) -> float:
-    visitors = {row["visitor_id"] for row in rows}
-    if not visitors:
-        return 0.0
-    converted_visitors = {
-        row["visitor_id"]
-        for row in rows
-        if row["event_type"] == "BILLING_QUEUE_JOIN"
-        or "billing" in (row["zone_id"] or "").lower()
-    }
-    return len(converted_visitors) / len(visitors)
-
-
 @app.get("/stores/{store_id}/metrics", response_model=StoreMetricsResponse)
 def store_metrics(store_id: str) -> StoreMetricsResponse:
-    init_database()
+    store_id = normalize_store_id(store_id)
     with get_connection() as connection:
         unique_visitors = connection.execute(
             """
@@ -409,27 +459,45 @@ def store_metrics(store_id: str) -> StoreMetricsResponse:
             for row in dwell_rows
         }
 
-        # Placeholder conversion: until POS/order events are ingested, treat a
-        # non-staff visitor reaching billing as a conversion proxy.
-        converted_visitors = connection.execute(
+        # Use actual POS transactions, falling back to visual billing interactions 
+        # if POS data for this store is missing or mismatched.
+        total_transactions = connection.execute(
+            "SELECT COUNT(*) FROM transactions WHERE store_id = ?",
+            (store_id,)
+        ).fetchone()[0]
+
+        visual_purchases = connection.execute(
             """
             SELECT COUNT(DISTINCT visitor_id)
             FROM events
-            WHERE
-                store_id = ?
-                AND is_staff = 0
-                AND (
-                    event_type = 'BILLING_QUEUE_JOIN'
-                    OR lower(COALESCE(zone_id, '')) LIKE '%billing%'
-                )
+            WHERE store_id = ? AND is_staff = 0 AND event_type = 'QUEUE_COMPLETED'
             """,
-            (store_id,),
+            (store_id,)
         ).fetchone()[0]
+
+        actual_purchases = max(total_transactions, visual_purchases)
+
         conversion_rate = (
-            round(converted_visitors / unique_visitors, 4)
+            round(actual_purchases / unique_visitors, 4)
             if unique_visitors
             else 0.0
         )
+
+        # Calculate abandonment rate from queue events
+        abandonment_stats = connection.execute(
+            """
+            SELECT 
+                SUM(CASE WHEN event_type = 'QUEUE_ABANDONED' THEN 1 ELSE 0 END) as abandoned,
+                SUM(CASE WHEN event_type IN ('QUEUE_COMPLETED', 'QUEUE_ABANDONED', 'BILLING_QUEUE_JOIN') THEN 1 ELSE 0 END) as total
+            FROM events
+            WHERE store_id = ? AND is_staff = 0
+            """,
+            (store_id,)
+        ).fetchone()
+
+        abandonment_rate = 0.0
+        if abandonment_stats and abandonment_stats["total"] and abandonment_stats["total"] > 0:
+            abandonment_rate = round(float(abandonment_stats["abandoned"] or 0) / abandonment_stats["total"], 4)
 
         billing_rows = connection.execute(
             """
@@ -455,14 +523,13 @@ def store_metrics(store_id: str) -> StoreMetricsResponse:
         conversion_rate=conversion_rate,
         avg_dwell_per_zone=avg_dwell_per_zone,
         queue_depth=queue_depth,
-        # No explicit cart/payment-abandonment signal exists yet.
-        abandonment_rate=0.0,
+        abandonment_rate=abandonment_rate,
     )
 
 
 @app.get("/stores/{store_id}/funnel", response_model=StoreFunnelResponse)
 def store_funnel(store_id: str) -> StoreFunnelResponse:
-    init_database()
+    store_id = normalize_store_id(store_id)
     with get_connection() as connection:
         funnel_row = connection.execute(
             """
@@ -478,7 +545,7 @@ def store_funnel(store_id: str) -> StoreFunnelResponse:
                     MAX(
                         CASE
                             WHEN
-                                event_type IN ('ZONE_ENTER', 'ZONE_DWELL')
+                                event_type IN ('ZONE_ENTER', 'ZONE_DWELL', 'ZONE_ENTERED')
                                 AND zone_id IS NOT NULL
                                 AND lower(zone_id) NOT LIKE '%billing%'
                             THEN 1
@@ -486,24 +553,17 @@ def store_funnel(store_id: str) -> StoreFunnelResponse:
                         END
                     ) AS has_zone_visit,
                     MAX(
-                        CASE
-                            WHEN event_type = 'BILLING_QUEUE_JOIN' THEN 1
-                            ELSE 0
+                        CASE 
+                            WHEN event_type IN ('BILLING_QUEUE_JOIN', 'QUEUE_COMPLETED') THEN 1
+                            ELSE 0 
                         END
                     ) AS has_billing_queue,
                     MAX(
-                        CASE
-                            WHEN event_type IN (
-                                'PURCHASE',
-                                'PURCHASE_COMPLETE',
-                                'ORDER_COMPLETED',
-                                'PAYMENT_SUCCESS',
-                                'CHECKOUT_COMPLETE'
-                            )
-                            THEN 1
-                            ELSE 0
+                        CASE 
+                            WHEN event_type = 'QUEUE_COMPLETED' THEN 1
+                            ELSE 0 
                         END
-                    ) AS has_purchase
+                    ) AS has_visual_completion
                 FROM events
                 WHERE store_id = ? AND is_staff = 0
                 GROUP BY visitor_id
@@ -511,18 +571,8 @@ def store_funnel(store_id: str) -> StoreFunnelResponse:
             SELECT
                 SUM(has_entry) AS entry_count,
                 SUM(has_zone_visit) AS zone_visit_count,
-                SUM(
-                    CASE 
-                        WHEN has_entry = 1 AND has_billing_queue = 1 THEN 1 
-                        ELSE 0 
-                    END
-                ) AS billing_queue_count,
-                SUM(
-                    CASE 
-                        WHEN has_entry = 1 AND has_purchase = 1 THEN 1 
-                        ELSE 0 
-                    END
-                ) AS purchase_count
+                SUM(has_billing_queue) AS billing_queue_count,
+                SUM(has_visual_completion) AS visual_completion_count
             FROM session_flags
             """,
             (store_id,),
@@ -531,7 +581,16 @@ def store_funnel(store_id: str) -> StoreFunnelResponse:
     entry_count = int(funnel_row["entry_count"] or 0)
     zone_visit_count = int(funnel_row["zone_visit_count"] or 0)
     billing_queue_count = int(funnel_row["billing_queue_count"] or 0)
-    purchase_count = int(funnel_row["purchase_count"] or 0)
+    visual_completion_count = int(funnel_row["visual_completion_count"] or 0)
+
+    # Replace visual Purchase proxy with POS Ground Truth
+    with get_connection() as connection:
+        pos_count = connection.execute(
+            "SELECT COUNT(*) FROM transactions WHERE store_id = ?", (store_id,)
+        ).fetchone()[0]
+
+    # Fallback to visual queue completion if POS data is mismatched for this store
+    purchase_count = max(pos_count, visual_completion_count)
 
     return StoreFunnelResponse(
         store_id=store_id,
@@ -551,7 +610,7 @@ def store_funnel(store_id: str) -> StoreFunnelResponse:
 
 @app.get("/stores/{store_id}/heatmap", response_model=StoreHeatmapResponse)
 def store_heatmap(store_id: str) -> StoreHeatmapResponse:
-    init_database()
+    store_id = normalize_store_id(store_id)
     with get_connection() as connection:
         unique_sessions = connection.execute(
             """
@@ -636,7 +695,7 @@ def store_heatmap(store_id: str) -> StoreHeatmapResponse:
 
 @app.get("/stores/{store_id}/anomalies", response_model=StoreAnomaliesResponse)
 def store_anomalies(store_id: str) -> StoreAnomaliesResponse:
-    init_database()
+    store_id = normalize_store_id(store_id)
     with get_connection() as connection:
         latest_timestamp = connection.execute(
             """
@@ -726,6 +785,34 @@ def store_anomalies(store_id: str) -> StoreAnomaliesResponse:
                     type="queue_spike",
                     severity="CRITICAL",
                     suggested_action="Open another billing counter or redirect staff to checkout.",
+                )
+            )
+
+    # Conversion Drop Anomaly (POS vs Footfall)
+    with get_connection() as connection:
+        current_tx_count = connection.execute(
+            "SELECT COUNT(*) FROM transactions WHERE store_id = ? AND timestamp >= ?",
+            (store_id, current_window_start.isoformat())
+        ).fetchone()[0]
+        
+        baseline_tx_count = connection.execute(
+            "SELECT COUNT(*) FROM transactions WHERE store_id = ? AND timestamp >= ? AND timestamp < ?",
+            (store_id, baseline_window_start.isoformat(), current_window_start.isoformat())
+        ).fetchone()[0]
+
+    unique_visitors_now = len({r["visitor_id"] for r in current_rows})
+    unique_visitors_base = len({r["visitor_id"] for r in baseline_rows})
+    
+    if unique_visitors_now > 5 and unique_visitors_base > 0:
+        current_rate = current_tx_count / unique_visitors_now
+        base_rate = baseline_tx_count / unique_visitors_base
+        
+        if current_rate < (base_rate * 0.5) and base_rate > 0.05:
+            anomalies.append(
+                StoreAnomaly(
+                    type="conversion_drop",
+                    severity="CRITICAL",
+                    suggested_action="Check for POS technical issues or long wait times.",
                 )
             )
 

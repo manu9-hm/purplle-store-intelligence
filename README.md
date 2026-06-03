@@ -1,195 +1,337 @@
-# purplle-store-intelligence
+# Purplle Store Intelligence
 
-## Intelligence API - Phase 1
+## System Overview
 
-### Local Development
+Purplle Store Intelligence transforms retail CCTV footage into actionable business intelligence using a modular AI pipeline. The platform analyzes customer movement, browsing behavior, billing activity, and sales conversion to provide store managers with real-time operational insights.
 
-```powershell
-.\venv\Scripts\python.exe -m uvicorn app.main:app --reload
-```
+Key capabilities:
 
-The API creates a SQLite database at:
+* Footfall analytics
+* Customer journey funnel analysis
+* Zone heatmaps and dwell-time analysis
+* Billing queue monitoring
+* POS transaction correlation
+* Multi-store support
+* Real-time dashboard visualization
+
+---
+
+## Project Architecture
+
+The system follows the pipeline below:
 
 ```text
-data/intelligence/events.sqlite
+Raw Video
+    ↓
+YOLOv8 Person Detection
+    ↓
+ByteTrack Multi-Object Tracking
+    ↓
+Zone-Based Event Generation
+    ↓
+JSONL Event Streams
+    ↓
+Ingestion API
+    ↓
+SQLite Analytics Database
+    ↓
+FastAPI Analytics Endpoints
+    ↓
+Streamlit Dashboard
 ```
 
-Health check:
+### Processing Flow
+
+1. YOLOv8 detects people in CCTV footage.
+2. ByteTrack maintains person identities across frames.
+3. Zone logic generates behavioral events.
+4. Events are written as JSONL files.
+5. Ingestion service loads events into SQLite.
+6. Analytics endpoints compute metrics and funnels.
+7. Streamlit dashboard visualizes store performance.
+
+---
+
+## Setup & Installation
+
+### Prerequisites
+
+* Python 3.11+
+* pip
+* YOLOv8 model weights
+* ByteTrack configuration
+
+### Install Dependencies
 
 ```powershell
-curl http://127.0.0.1:8000/health
+pip install -r requirements.txt
 ```
 
-Example response:
-
-```json
-{
-  "status": "ok",
-  "feed_status": "STALE_FEED",
-  "minutes_since_last_event": null,
-  "last_event_timestamp": null,
-  "stores_seen": []
-}
-```
-
-`feed_status` is `OK` when the latest ingested event is 10 minutes old or
-newer. It is `STALE_FEED` when there are no events, the latest timestamp cannot
-be parsed, or the latest event is older than 10 minutes.
-
-Ingest events:
+### Optional Docker Setup
 
 ```powershell
-curl -X POST http://127.0.0.1:8000/events/ingest `
-  -H "Content-Type: application/json" `
-  -d "{\"events\":[{\"event_id\":\"evt-001\",\"store_id\":\"purplle_store_001\",\"camera_id\":\"CAM5\",\"visitor_id\":\"CAM5-124\",\"event_type\":\"ZONE_ENTER\",\"timestamp\":\"2026-06-01T05:10:13.593Z\",\"zone_id\":\"billing_zone\",\"dwell_ms\":null,\"is_staff\":true,\"confidence\":0.8687,\"metadata\":{\"track_id\":124,\"staff_confidence\":0.7241,\"staff_reason\":\"stable_staff_majority_vote\",\"staff_observations\":233}}]}"
-```
-
-Example response:
-
-```json
-{
-  "inserted_count": 1,
-  "duplicate_count": 0,
-  "invalid_count": 0,
-  "invalid_events": []
-}
-```
-
-Submitting the same `event_id` again is idempotent:
-
-```json
-{
-  "inserted_count": 0,
-  "duplicate_count": 1,
-  "invalid_count": 0,
-  "invalid_events": []
-}
-```
-
-Invalid events do not block valid events in the same batch. The response includes
-one entry per invalid event:
-
-```json
-{
-  "inserted_count": 1,
-  "duplicate_count": 0,
-  "invalid_count": 1,
-  "invalid_events": [
-    {
-      "index": 1,
-      "event_id": "bad-event-001",
-      "error": "confidence: Field required"
-    }
-  ]
-}
-```
-
-Store metrics:
-
-```powershell
-curl http://127.0.0.1:8000/stores/purplle_store_001/metrics
-```
-
-Example response:
-
-```json
-{
-  "store_id": "purplle_store_001",
-  "unique_visitors": 42,
-  "conversion_rate": 0.2143,
-  "avg_dwell_per_zone": {
-    "billing_zone": 3002.5,
-    "skincare_zone": 7421.33
-  },
-  "queue_depth": 3,
-  "abandonment_rate": 0.0
-}
-```
-
-Metrics assumptions for Phase 1:
-
-* All customer metrics exclude `is_staff=true`.
-* `unique_visitors` counts distinct non-staff `visitor_id` values.
-* `avg_dwell_per_zone` uses non-staff `ZONE_DWELL` events with `dwell_ms`.
-* `queue_depth` is the maximum `metadata.queue_depth` observed on non-staff `BILLING_QUEUE_JOIN` events.
-* `conversion_rate` is a placeholder until POS/order events are ingested. For now it means distinct non-staff visitors with a billing interaction divided by distinct non-staff visitors.
-* `abandonment_rate` is `0.0` until explicit abandonment or payment outcome signals are available.
-
-Anomaly assumptions for Phase 1:
-
-* All anomaly checks exclude `is_staff=true`.
-* `dead_zone` checks for no non-staff `ZONE_ENTER` events in the latest 30-minute event window.
-* `queue_spike` compares the maximum current `metadata.queue_depth` from non-staff `BILLING_QUEUE_JOIN` events with the previous 120-minute average and flags only a materially higher current queue.
-* `conversion_drop` uses the same billing-interaction conversion proxy as `conversion_rate` until POS/order events are ingested.
-* Anomaly windows are anchored to the latest non-staff event timestamp in SQLite because the challenge data is offline video-derived data, not a live stream.
-
-### Live Dashboard
-
-The project includes a professional real-time dashboard built with Streamlit and Plotly.
-
-```powershell
-# 1. Ensure the API is running (FastAPI)
-# 2. Launch the dashboard
-streamlit run app.py
-```
-
-The dashboard automatically refreshes every 5 seconds and visualizes KPIs, visitor funnels, and zone heatmaps.
-
-### Docker Usage
-
-The project includes a `docker-compose.yml` for easy deployment.
-
-```powershell
-# Build and start the API
 docker-compose up --build -d
-
-# Stop the API
-docker-compose down
 ```
 
-### Testing
+---
 
-Automated tests cover ingest, analytics logic, and error handling.
+## Detection Pipeline
 
-```powershell
-# Run all tests
-pytest app/test_api.py -v
+The detection pipeline converts CCTV footage into structured customer-behavior events.
 
-# Run tests with coverage report
-pytest --cov=app app/
-```
+### Components
 
-### Detection Pipeline Usage
+* YOLOv8 for person detection
+* ByteTrack for multi-object tracking
+* Polygon-based zone engine
+* Event generation pipeline
 
-#### 1. Zone Calibration
-Use the calibrator to define zones (browsing, entrance, billing) for a camera.
+---
+
+## Zone Calibration
+
+Each camera requires calibrated zones before event generation.
+
+Example:
 
 ```powershell
 python pipeline/zone_calibrator.py --video data/videos/cam3.mp4 --output configs/zones/cam3_zones.json --camera-id CAM3 --zone-id entrance_zone --zone-type entrance
 ```
 
-#### 2. Event Generation
-Run the detection pipeline to process video and generate a JSONL event stream.
+### Zone Types
+
+| Zone Type | Purpose                                   |
+| --------- | ----------------------------------------- |
+| entrance  | Entry / Exit counting                     |
+| browsing  | Dwell-time and browsing analytics         |
+| billing   | Queue monitoring and conversion analytics |
+
+### Calibration Notes
+
+* Draw polygons on floor regions where customers stand.
+* Entrance zones should be narrow thresholds.
+* Billing zones should exclude cashier-only areas.
+* Browsing zones should cover customer standing areas.
+
+---
+
+## Event Generation
+
+Generate JSONL behavioral events from CCTV footage.
+
+Example:
 
 ```powershell
 python pipeline/generate_events.py --video data/videos/cam1.mp4 --camera-id CAM1 --zones configs/zones/cam1_zones.json --output data/events/cam1_events.jsonl
 ```
 
-### Feeding Events into API
+---
 
-Once events are generated in `.jsonl` format, they can be ingested into the API.
+## Running Against Challenge Clips
+
+Store 1008 events were generated directly from the provided CCTV footage using the YOLOv8 + ByteTrack pipeline and manually calibrated zones.
+
+### Store 1008 - Browsing Area
+
+```powershell
+python pipeline/generate_events.py --video data/store2/cam1.mp4 --camera-id CAM1 --store-id 1008 --zones configs/zones/store2/cam1_zones.json --output data/events/store2_cam1_events.jsonl
+```
+
+### Store 1008 - Billing Counter
+
+```powershell
+python pipeline/generate_events.py --video data/store2/cam5.mp4 --camera-id CAM5 --store-id 1008 --zones configs/zones/store2/cam5_zones.json --output data/events/store2_cam5_events.jsonl
+```
+
+### Store 1008 - Entrance Camera
+
+```powershell
+python pipeline/generate_events.py --video "data/store2/entry 2.mp4" --camera-id ENTRY2 --store-id 1008 --zones configs/zones/store2/entry2_zones.json --output data/events/store2_entry2_events.jsonl
+```
+
+The resulting JSONL files are automatically ingested by the analytics platform using the ingestion utility.
+
+---
+
+## Ingestion
+
+The ingestion utility automatically discovers JSONL event files under `data/events` and loads them into the analytics database.
 
 ```powershell
 python ingest_events.py
 ```
 
-### Troubleshooting
+The script also ingests POS transaction data and performs verification checks against analytics endpoints.
 
-**1. Database Unavailable (503 Error)**
-The API returns `DATABASE_UNAVAILABLE` if the SQLite file cannot be accessed. Check volume permissions if running in Docker.
+---
 
-**2. Stale Feed Warning**
-The `/health` endpoint reports `STALE_FEED` if no events have been ingested in the last 10 minutes. 
+## Starting the API
 
-**3. Dependency Conflicts**
-Ensure `opencv-python` version is compatible with `numpy 1.24.4`.
+Start the FastAPI backend:
+
+```powershell
+uvicorn app.main:app --reload
+```
+
+Default API URL:
+
+```text
+http://127.0.0.1:8000
+```
+
+---
+
+## API Usage Examples
+
+### Store Metrics
+
+```http
+GET /stores/1076/metrics
+GET /stores/1008/metrics
+```
+
+### Funnel Analytics
+
+```http
+GET /stores/1076/funnel
+GET /stores/1008/funnel
+```
+
+### Heatmaps
+
+```http
+GET /stores/1076/heatmap
+GET /stores/1008/heatmap
+```
+
+### Anomaly Detection
+
+```http
+GET /stores/1076/anomalies
+GET /stores/1008/anomalies
+```
+
+---
+
+## Multi-Store Support
+
+The platform supports multiple stores simultaneously.
+
+### Store 1076
+
+* Organizer-provided diagnostic dataset
+* POS correlation enabled
+* Funnel analytics enabled
+
+### Store 1008
+
+* Generated from actual challenge CCTV clips
+* YOLOv8 + ByteTrack processing
+* Manual zone calibration
+* Heatmaps, funnel analytics, and billing analytics enabled
+
+### Store ID Normalization
+
+The ingestion layer normalizes identifiers such as:
+
+```text
+store_1076 → 1076
+ST1076 → 1076
+```
+
+This ensures reliable correlation between events and POS transactions.
+
+---
+
+## Dashboard (Part E)
+
+A real-time dashboard is implemented using Streamlit and Plotly.
+
+Start the dashboard:
+
+```powershell
+streamlit run app.py
+```
+
+Local URL:
+
+```text
+http://localhost:8501
+```
+
+Dashboard features:
+
+* Footfall analytics
+* Conversion metrics
+* Funnel visualization
+* Zone heatmaps
+* Queue monitoring
+* Multi-store support
+
+---
+
+## Testing
+
+Run API tests:
+
+```powershell
+pytest app/test_api.py -v
+```
+
+---
+
+## Repository Structure
+
+```text
+app/
+├── main.py
+├── test_api.py
+
+pipeline/
+├── generate_events.py
+├── zone_calibrator.py
+
+configs/
+└── zones/
+
+data/
+├── events/
+├── store2/
+└── POS/
+
+README.md
+DESIGN.md
+CHOICES.md
+ingest_events.py
+```
+
+---
+
+## Documentation
+
+Additional project documentation:
+
+* README.md — Setup, execution, and usage
+* DESIGN.md — Architecture and AI-assisted decisions
+* CHOICES.md — Model selection, schema design, and API design rationale
+
+---
+
+## Submission Notes
+
+Store 1008 analytics were generated from real CCTV footage using the detection pipeline and manually calibrated zones.
+
+The solution supports:
+
+* Multi-store analytics
+* YOLOv8 detection
+* ByteTrack tracking
+* POS correlation
+* FastAPI analytics
+* Streamlit dashboard
+* Heatmaps
+* Funnel analytics
+
+---
+
+*Purplle Store Intelligence Challenge Submission*

@@ -1,0 +1,10 @@
+{
+  "camera_id": "cam3",
+  "zones": [
+    {
+      "zone_id": "main_entrance_1008",
+      "zone_type": "entrance",
+      "polygon": [[400, 500], [800, 500], [800, 600], [400, 600]]
+    }
+  ]
+}

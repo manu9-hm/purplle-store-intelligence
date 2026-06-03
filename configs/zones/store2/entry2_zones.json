@@ -1,0 +1,27 @@
+{
+  "camera_id": "ENTRY2",
+  "zones": [
+    {
+      "zone_id": "entrance_zone",
+      "zone_type": "entrance",
+      "polygon": [
+        [
+          313,
+          643
+        ],
+        [
+          662,
+          610
+        ],
+        [
+          718,
+          892
+        ],
+        [
+          299,
+          974
+        ]
+      ]
+    }
+  ]
+}

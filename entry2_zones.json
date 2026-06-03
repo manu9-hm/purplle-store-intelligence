@@ -1,0 +1,10 @@
+{
+  "camera_id": "entry2",
+  "zones": [
+    {
+      "zone_id": "side_entrance_1008",
+      "zone_type": "entrance",
+      "polygon": [[200, 450], [1000, 450], [1000, 550], [200, 550]]
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "camera_id": "CAM5",
+  "zones": [
+    {
+      "zone_id": "billing_zone",
+      "zone_type": "billing",
+      "polygon": [
+        [
+          275,
+          342
+        ],
+        [
+          694,
+          375
+        ],
+        [
+          721,
+          1066
+        ],
+        [
+          236,
+          1061
+        ]
+      ]
+    }
+  ]
+}

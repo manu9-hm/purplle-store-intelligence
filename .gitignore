@@ -3,3 +3,9 @@ __pycache__/
 *.pyc
 .env
 data/videos/
+.pytest_cache/
+.coverage
+
+data/store1/
+data/store2/
+*.mp4

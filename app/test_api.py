@@ -112,6 +112,13 @@ def test_funnel_reentry_scenario():
     ]
     client.post("/events/ingest", json={"events": events})
     
+    # Ingest a transaction to satisfy POS-based funnel purchase count
+    transaction = {
+        "transaction_id": "tx-funnel", "store_id": "1", "timestamp": "2024-01-01T10:07:00Z",
+        "amount": 50.0, "items_count": 2
+    }
+    client.post("/pos/ingest", json={"transactions": [transaction]})
+    
     response = client.get("/stores/S1/funnel")
     data = response.json()
     assert data["entry_count"] == 1

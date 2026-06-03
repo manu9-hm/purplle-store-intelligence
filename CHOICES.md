@@ -32,8 +32,8 @@
 
 ## Decision 5: Funnel Session Validation
 *   **Observation**: CAM3 (entrance camera) produced no entry events in the provided sample; customers were already present in CAM1/CAM2 when recording started.
-*   **Logic**: Zone activity is reported to show store engagement. However, entry-based conversion stages (Billing, Purchase) remain zero because the beginning of the journey was not observed. 
-*   **Why**: This preserves metric correctness. Attributing purchases to sessions where the entry was missed would lead to misleading conversion rate spikes.
+*   **Logic**: **Evidence-First Analytics**. Funnel stages are counted based on observed behavior (e.g., reaching billing) even if the entrance was not captured.
+*   **Why**: Practical retail intelligence must account for "pre-existing" visitors. Removing strict sequence requirements ensures the funnel remains representative even when recording sessions are fragmented.
 
 ## Decision 6: Multi-Camera Visitor Tracking
 *   **Observation**: The system treats each camera as an independent tracking domain (local Re-ID).
@@ -42,10 +42,10 @@
 
 ## Decision 7: Conversion Metric Definition
 *   **Standard**: Purchases / Total Visitors.
-*   **Final Choice**: **Billing Interaction Proxy**.
-*   **Why**: Integrated POS/Order data is not yet available in the event stream. Therefore, a visitor reaching the `billing_zone` or triggering a `BILLING_QUEUE_JOIN` event is used as the numerator for the conversion rate.
-*   **Note**: As a result, the `conversion_rate` in the Metrics API may be non-zero while `purchase_count` in the Funnel API remains zero, because the funnel strictly requires an observed `ENTRY` event to validate the session.
-
+*   **Final Choice**: **Actual POS Transactions**.
+*   **Why**: POS ground truth from `transactions.csv` has been integrated. This provides the most accurate business KPI by dividing actual sales by unique footfall detected by the AI pipeline.
+*   **Note**: The system prioritizes business truth (POS) but falls back to visual evidence (Queue Completion) to ensure the funnel remains representative even when external data feeds are mismatched or recording sessions are fragmented.
+ 
 ## North Star Metric Alignment
 **Business Metric**: Offline Store Conversion Rate (Purchases ÷ Unique Visitors).
 
@@ -56,7 +56,6 @@ How subsystems contribute:
 
 **Known Limitations & Trade-offs**:
 1.  **Re-ID Fragmentation**: May slightly inflate the denominator (Total Visitors) until cross-camera tracking is implemented in Phase 2.
-2.  **Missing Entries (CAM3)**: Preferring accuracy over inference; we choose to report 0% conversion for sessions where the entry was not seen to avoid skewing data with incomplete sessions.
-
+2.  **Missing Entries (CAM3)**: The system implements "Evidence-First Analytics", allowing funnel stages to be populated based on observed downstream activity (like billing) even if the entrance was missed.
 ---
 *Part D Compliance - Purplle Store Intelligence Challenge*

@@ -39,7 +39,7 @@ This system provides a modular pipeline to transform retail CCTV footage into ac
 ## D. Intelligence API Flow
 *   **Ingest**: Validates event batches via Pydantic; ensures idempotency using `INSERT OR IGNORE`.
 *   **Metrics**: Aggregates visitor counts and calculates conversion proxies.
-*   **Funnel**: Analyzes the customer journey from ENTRY → ZONE_VISIT → BILLING → PURCHASE.
+*   **Funnel**: Analyzes the customer journey from ENTRY → ZONE_VISIT → BILLING, joined with POS transactions for PURCHASE.
 *   **Heatmap**: Normalizes visit frequency across zones to a 0-100 scale for visualization.
 *   **Anomalies**: Runs window-based statistical checks (Dead Zone, Queue Spikes).
 
